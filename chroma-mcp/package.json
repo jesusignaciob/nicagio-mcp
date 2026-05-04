@@ -2,23 +2,32 @@
   "name": "chroma-mcp",
   "version": "1.0.0",
   "description": "MCP server for ChromaDB semantic memory",
-  "main": "index.js",
+  "main": "dist/server.js",
+  "types": "dist/server.d.ts",
   "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsx src/server.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
-  "author": "",
+  "author": "Jesús Becerra",
   "license": "MIT",
   "dependencies": {
     "@chroma-core/default-embed": "^0.1.9",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "chromadb": "^3.4.3"
   },
+  "devDependencies": {
+    "@types/node": "^22.19.17",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  },
   "engines": {
     "node": ">=18"
   },
   "type": "module",
   "bin": {
-    "chroma-mcp": "./server.js"
+    "chroma-mcp": "./dist/server.js"
   }
 }
