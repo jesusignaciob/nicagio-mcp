@@ -1,0 +1,1 @@
+{"version":3,"file":"text-tool.d.ts","sourceRoot":"","sources":["../../src/tools/text-tool.ts"],"names":[],"mappings":"AAAA;;;;GAIG;AAGH,OAAO,KAAK,EAAE,cAAc,EAAE,MAAM,gBAAgB,CAAC;AACrD,OAAO,KAAK,EAAE,WAAW,EAAE,MAAM,oBAAoB,CAAC;AAWtD,wBAAgB,cAAc,CAAC,QAAQ,EAAE,WAAW,GAAG,cAAc,CAuBpE"}
