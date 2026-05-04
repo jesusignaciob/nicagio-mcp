@@ -6,3 +6,4 @@ node_modules/
 # Other dist/ dirs are ignored by default
 /dist/
 !/minimax-mcp/dist/
+!/chroma-mcp/dist/

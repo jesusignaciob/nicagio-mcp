@@ -8,6 +8,7 @@
 - MCP server for ChromaDB vector memory
 - Tools: `store_memory`, `search_memory`, `list_collections`, `get_collection_info`, `delete_memory`
 - Auto-warming of embedding model on startup
+- Migrado de JavaScript a TypeScript con tipos estrictos
 - Configurable host, port, collection, tenant, and database via environment variables
 
 #### minimax-mcp
