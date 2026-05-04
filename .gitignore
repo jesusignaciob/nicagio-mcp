@@ -1,4 +1,8 @@
 node_modules/
-dist/
 *.log
 .env
+
+# minimax-mcp dist/ is intentional (committed for deterministic installs)
+# Other dist/ dirs are ignored by default
+/dist/
+!/minimax-mcp/dist/

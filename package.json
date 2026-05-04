@@ -3,6 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "description": "Custom MCP servers by Nicagio",
+  "author": "Jesús Becerra",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "install:all": "cd chroma-mcp && npm install && cd ../minimax-mcp && npm install",
     "build": "cd minimax-mcp && npm run build"

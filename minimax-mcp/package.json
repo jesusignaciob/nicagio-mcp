@@ -2,6 +2,9 @@
   "name": "minimax-mcp",
   "version": "1.0.0",
   "description": "MCP server wrapping MiniMax CLI (mmx) for AI agent integration",
+  "engines": {
+    "node": ">=18"
+  },
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
