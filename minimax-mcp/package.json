@@ -1,0 +1,30 @@
+{
+  "name": "minimax-mcp",
+  "version": "1.0.0",
+  "description": "MCP server wrapping MiniMax CLI (mmx) for AI agent integration",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.17",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  },
+  "keywords": [
+    "mcp",
+    "minimax",
+    "cli",
+    "ai",
+    "agent"
+  ],
+  "license": "MIT"
+}
