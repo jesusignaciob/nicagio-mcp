@@ -5,6 +5,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema, ErrorCode, McpError } fr
 import { QdrantClient } from '@qdrant/js-client-rest';
 import { randomUUID } from 'node:crypto';
 import { pipeline } from '@huggingface/transformers';
+import { BranchIndexer, DocIndexer, KnowledgeSearch } from '@nicagio/knowledge-index';
 const QDRANT_URL = process.env.QDRANT_URL ?? 'http://127.0.0.1:6333';
 const DEFAULT_COLLECTION = process.env.QDRANT_COLLECTION ?? 'openclaw-memory';
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL ?? 'Xenova/all-MiniLM-L6-v2';
@@ -207,6 +208,88 @@ const TOOLS = [
             properties: {
                 collection: { type: 'string', description: `Collection name (default: ${DEFAULT_COLLECTION})` },
             },
+        },
+    },
+    {
+        name: 'index_branch',
+        description: 'Index a git branch into the knowledge base (diffs, summaries)',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                repo_path: { type: 'string', description: 'Absolute path to the git repository' },
+                branch: { type: 'string', description: 'Branch name to index' },
+                incremental: { type: 'boolean', description: 'Only index new commits since last index (default: false)' },
+            },
+            required: ['repo_path', 'branch'],
+        },
+    },
+    {
+        name: 'search_knowledge',
+        description: 'Semantic search across all knowledge base domains (code, infra-doc, project-doc)',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                query: { type: 'string', description: 'Search query' },
+                domain: { type: 'string', description: 'Filter by domain: code, infra-doc, or project-doc' },
+                source: { type: 'string', description: 'Filter by source (repo name or infrastructure/project)' },
+                branch: { type: 'string', description: 'Filter by git branch name' },
+                doc_type: { type: 'string', description: 'Filter by doc type: hu, adr, dockerfile, guide, etc.' },
+                tags: { type: 'array', items: { type: 'string' }, description: 'Filter by tags' },
+                limit: { type: 'number', description: 'Number of results (default: 10)' },
+            },
+            required: ['query'],
+        },
+    },
+    {
+        name: 'get_branch_summary',
+        description: 'Get the summary of an already-indexed git branch',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                repo: { type: 'string', description: 'Repository name (e.g., nicagio-mcp)' },
+                branch: { type: 'string', description: 'Branch name' },
+            },
+            required: ['repo', 'branch'],
+        },
+    },
+    {
+        name: 'index_doc',
+        description: 'Index a documentation file into the knowledge base',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                file_path: { type: 'string', description: 'Absolute path to the documentation file' },
+                domain: { type: 'string', enum: ['infra-doc', 'project-doc'], description: 'Documentation domain' },
+                tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags' },
+            },
+            required: ['file_path', 'domain'],
+        },
+    },
+    {
+        name: 'list_knowledge',
+        description: 'List knowledge base entries with filters (payload browsing, not semantic search)',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                domain: { type: 'string', description: 'Filter by domain: code, infra-doc, or project-doc' },
+                source: { type: 'string', description: 'Filter by source' },
+                branch: { type: 'string', description: 'Filter by git branch' },
+                doc_type: { type: 'string', description: 'Filter by doc type' },
+                tags: { type: 'array', items: { type: 'string' }, description: 'Filter by tags' },
+                limit: { type: 'number', description: 'Number of results (default: 20)' },
+            },
+        },
+    },
+    {
+        name: 'reindex',
+        description: 'Delete all points in a domain (optionally filtered by source) so they can be re-indexed',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                domain: { type: 'string', description: 'Domain to reindex: code, infra-doc, or project-doc' },
+                source: { type: 'string', description: 'Optional source filter (repo name or doc source)' },
+            },
+            required: ['domain'],
         },
     },
     {
@@ -512,6 +595,68 @@ async function handleSnapshotDelete(args) {
     const result = await client.deleteSnapshot(collection, snapshot_name, { wait: true });
     return { content: [{ type: 'text', text: JSON.stringify({ deleted: result }) }] };
 }
+async function handleIndexBranch(args) {
+    const branchIndexer = globalThis.__branchIndexer;
+    const repoPath = args.repo_path;
+    const branch = args.branch;
+    const incremental = args.incremental ?? false;
+    const result = incremental
+        ? await branchIndexer.indexBranchIncremental(repoPath, branch)
+        : await branchIndexer.indexBranch(repoPath, branch);
+    return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+}
+async function handleSearchKnowledge(args) {
+    const knowledgeSearch = globalThis.__knowledgeSearch;
+    const query = args.query;
+    const options = {
+        domain: args.domain,
+        source: args.source,
+        branch: args.branch,
+        docType: args.doc_type,
+        tags: args.tags,
+        limit: args.limit ?? 10,
+    };
+    const results = await knowledgeSearch.search(query, options);
+    return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
+}
+async function handleGetBranchSummary(args) {
+    const branchIndexer = globalThis.__branchIndexer;
+    const repo = args.repo;
+    const branch = args.branch;
+    const summary = await branchIndexer.getBranchSummary(repo, branch);
+    if (!summary) {
+        return { content: [{ type: 'text', text: JSON.stringify({ error: 'Branch summary not found. Index the branch first.' }) }], isError: true };
+    }
+    return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }] };
+}
+async function handleIndexDoc(args) {
+    const docIndexer = globalThis.__docIndexer;
+    const filePath = args.file_path;
+    const domain = args.domain;
+    const tags = args.tags;
+    const result = await docIndexer.indexDoc(filePath, domain, tags);
+    return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+}
+async function handleListKnowledge(args) {
+    const knowledgeSearch = globalThis.__knowledgeSearch;
+    const options = {
+        domain: args.domain,
+        source: args.source,
+        branch: args.branch,
+        docType: args.doc_type,
+        tags: args.tags,
+        limit: args.limit ?? 20,
+    };
+    const result = await knowledgeSearch.list(options);
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+}
+async function handleReindex(args) {
+    const knowledgeSearch = globalThis.__knowledgeSearch;
+    const domain = args.domain;
+    const source = args.source;
+    const result = await knowledgeSearch.reindex(domain, source);
+    return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+}
 const server = new Server({ name: 'qdrant-mcp', version: '1.0.0' }, { capabilities: { tools: {} } });
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -532,6 +677,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             case 'snapshot_create': return await handleSnapshotCreate(args ?? {});
             case 'snapshot_list': return await handleSnapshotList(args ?? {});
             case 'snapshot_delete': return await handleSnapshotDelete(args ?? {});
+            case 'index_branch': return await handleIndexBranch(args ?? {});
+            case 'search_knowledge': return await handleSearchKnowledge(args ?? {});
+            case 'get_branch_summary': return await handleGetBranchSummary(args ?? {});
+            case 'index_doc': return await handleIndexDoc(args ?? {});
+            case 'list_knowledge': return await handleListKnowledge(args ?? {});
+            case 'reindex': return await handleReindex(args ?? {});
             default: throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
         }
     }
@@ -553,6 +704,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
         const warmup = await embed('warmup');
         console.error(`Embedding model ready (${((Date.now() - start) / 1000).toFixed(1)}s)`);
+        const branchIndexer = new BranchIndexer(QDRANT_URL, embed);
+        const docIndexer = new DocIndexer(QDRANT_URL, embed);
+        const knowledgeSearch = new KnowledgeSearch(QDRANT_URL, embed);
+        globalThis.__branchIndexer = branchIndexer;
+        globalThis.__docIndexer = docIndexer;
+        globalThis.__knowledgeSearch = knowledgeSearch;
     }
     catch (e) {
         const message = e instanceof Error ? e.message : String(e);

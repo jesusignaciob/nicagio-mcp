@@ -1,22 +1,20 @@
 {
-  "name": "qdrant-mcp",
+  "name": "@nicagio/knowledge-index",
   "version": "1.0.0",
   "type": "module",
-  "main": "dist/server.js",
+  "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/server.js",
-    "dev": "tsx src/server.ts"
+    "test": "vitest run"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.0.0",
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "@nicagio/knowledge-index": "file:../knowledge-index",
     "@qdrant/js-client-rest": "^1.12.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "tsx": "^4.0.0",
-    "typescript": "^6.0.3"
+    "typescript": "^5.0.0",
+    "vitest": "^3.0.0"
   }
 }
