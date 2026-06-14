@@ -7,3 +7,4 @@ node_modules/
 /dist/
 !/minimax-mcp/dist/
 !/chroma-mcp/dist/
+!/qdrant-mcp/dist/
