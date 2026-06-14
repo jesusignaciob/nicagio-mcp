@@ -718,8 +718,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             throw new Error('Embedding model failed to load');
         };
     }
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    console.error('Qdrant MCP server running on stdio');
 })();
-const transport = new StdioServerTransport();
-await server.connect(transport);
-console.error('Qdrant MCP server running on stdio');
 //# sourceMappingURL=server.js.map
