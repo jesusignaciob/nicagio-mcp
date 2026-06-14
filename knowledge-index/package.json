@@ -8,8 +8,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@huggingface/transformers": "^3.0.0",
-    "@qdrant/js-client-rest": "^1.12.0"
+    "@huggingface/transformers": "^3.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

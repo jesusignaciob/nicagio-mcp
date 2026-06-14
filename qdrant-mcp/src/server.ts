@@ -5,7 +5,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema, ErrorCode, McpError } fr
 import { QdrantClient } from '@qdrant/js-client-rest';
 import { randomUUID } from 'node:crypto';
 import { pipeline } from '@huggingface/transformers';
-import { BranchIndexer, DocIndexer, KnowledgeSearch, createEmbedder } from '@nicagio/knowledge-index';
+import { BranchIndexer, DocIndexer, KnowledgeSearch } from '@nicagio/knowledge-index';
 
 const QDRANT_URL = process.env.QDRANT_URL ?? 'http://127.0.0.1:6333';
 const DEFAULT_COLLECTION = process.env.QDRANT_COLLECTION ?? 'openclaw-memory';
@@ -726,7 +726,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const start = Date.now();
     const extractor = await pipeline('feature-extraction', EMBEDDING_MODEL);
     embed = async (text: string) => {
-      const result = await extractor(text, { pooling: 'cls' });
+      const result = await extractor(text, { pooling: 'mean', normalize: true });
       return Array.from(result.data) as number[];
     };
     const warmup = await embed('warmup');

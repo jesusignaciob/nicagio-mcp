@@ -699,7 +699,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const start = Date.now();
         const extractor = await pipeline('feature-extraction', EMBEDDING_MODEL);
         embed = async (text) => {
-            const result = await extractor(text, { pooling: 'cls' });
+            const result = await extractor(text, { pooling: 'mean', normalize: true });
             return Array.from(result.data);
         };
         const warmup = await embed('warmup');
