@@ -150,6 +150,81 @@ const TOOLS = [
       required: ['query'],
     },
   },
+  {
+    name: 'count_memories',
+    description: 'Count points matching a filter (faster than search — no vector computation)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        collection: { type: 'string', description: `Collection name (default: ${DEFAULT_COLLECTION})` },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Filter by tags' },
+        from: { type: 'string', description: "Filter by 'from' field in metadata" },
+        to: { type: 'string', description: "Filter by 'to' field in metadata" },
+        priority: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Filter by priority' },
+        since: { type: 'string', description: 'ISO date — filter by timestamp >= this' },
+      },
+    },
+  },
+  {
+    name: 'delete_by_filter',
+    description: 'Delete multiple points matching a filter (mass delete, not one-by-one)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        collection: { type: 'string', description: `Collection name (default: ${DEFAULT_COLLECTION})` },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Filter by tags' },
+        from: { type: 'string', description: "Filter by 'from' field in metadata" },
+        to: { type: 'string', description: "Filter by 'to' field in metadata" },
+        priority: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Filter by priority' },
+        before: { type: 'string', description: 'ISO date — delete points with created_at < this' },
+      },
+    },
+  },
+  {
+    name: 'create_payload_index',
+    description: 'Create an index on a payload field for faster filtering',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        collection: { type: 'string', description: `Collection name (default: ${DEFAULT_COLLECTION})` },
+        field_name: { type: 'string', description: 'The payload field to index' },
+        field_schema: { type: 'string', enum: ['keyword', 'integer', 'float', 'bool', 'text'], description: 'Payload field schema type (default: keyword)' },
+      },
+      required: ['field_name'],
+    },
+  },
+  {
+    name: 'snapshot_create',
+    description: 'Create a backup snapshot of a collection',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        collection: { type: 'string', description: `Collection name (default: ${DEFAULT_COLLECTION})` },
+      },
+    },
+  },
+  {
+    name: 'snapshot_list',
+    description: 'List available snapshots for a collection',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        collection: { type: 'string', description: `Collection name (default: ${DEFAULT_COLLECTION})` },
+      },
+    },
+  },
+  {
+    name: 'snapshot_delete',
+    description: 'Delete a specific snapshot',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        collection: { type: 'string', description: `Collection name (default: ${DEFAULT_COLLECTION})` },
+        snapshot_name: { type: 'string', description: 'Name of the snapshot to delete' },
+      },
+      required: ['snapshot_name'],
+    },
+  },
 ];
 
 function generateId(): string {
@@ -369,6 +444,91 @@ async function handleHybridSearch(args: Record<string, unknown>) {
   return { content: [{ type: 'text', text: JSON.stringify(fused.slice(0, n_results), null, 2) }] };
 }
 
+function buildFilter(args: Record<string, unknown>): { must: Record<string, unknown>[] } | undefined {
+  const must: Record<string, unknown>[] = [];
+  if (args.tags) {
+    const tags = Array.isArray(args.tags) ? (args.tags as string[]) : [String(args.tags)];
+    for (const tag of tags) {
+      must.push({ key: 'tags', match: { value: tag } });
+    }
+  }
+  if (args.from) {
+    must.push({ key: 'from', match: { value: args.from as string } });
+  }
+  if (args.to) {
+    must.push({ key: 'to', match: { value: args.to as string } });
+  }
+  if (args.priority) {
+    must.push({ key: 'priority', match: { value: args.priority as string } });
+  }
+  if (args.since) {
+    const sinceMs = new Date(args.since as string).getTime();
+    if (!isNaN(sinceMs)) {
+      must.push({ key: 'created_at', range: { gte: sinceMs } });
+    }
+  }
+  if (args.before) {
+    const beforeMs = new Date(args.before as string).getTime();
+    if (!isNaN(beforeMs)) {
+      must.push({ key: 'created_at', range: { lt: beforeMs } });
+    }
+  }
+  return must.length > 0 ? { must } : undefined;
+}
+
+async function handleCountMemories(args: Record<string, unknown>) {
+  const collection = (args.collection as string) ?? DEFAULT_COLLECTION;
+  await ensureCollection(collection);
+  const filter = buildFilter(args);
+  const result = await client.count(collection, { filter, exact: true });
+  return { content: [{ type: 'text', text: JSON.stringify({ count: result.count }) }] };
+}
+
+async function handleDeleteByFilter(args: Record<string, unknown>) {
+  const collection = (args.collection as string) ?? DEFAULT_COLLECTION;
+  const filter = buildFilter(args);
+  if (!filter) {
+    return { content: [{ type: 'text', text: JSON.stringify({ error: 'At least one filter condition is required for mass delete' }) }], isError: true };
+  }
+  await client.delete(collection, { wait: true, filter });
+  return { content: [{ type: 'text', text: JSON.stringify({ deleted: true, status: 'pending' }) }] };
+}
+
+async function handleCreatePayloadIndex(args: Record<string, unknown>) {
+  const collection = (args.collection as string) ?? DEFAULT_COLLECTION;
+  await ensureCollection(collection);
+  const field_name = args.field_name as string;
+  const field_schema = (args.field_schema as string) ?? 'keyword';
+  await client.createPayloadIndex(collection, { field_name, field_schema: field_schema as 'keyword', wait: true });
+  return { content: [{ type: 'text', text: JSON.stringify({ status: 'ok', field: field_name, schema: field_schema }) }] };
+}
+
+async function handleSnapshotCreate(args: Record<string, unknown>) {
+  const collection = (args.collection as string) ?? DEFAULT_COLLECTION;
+  await ensureCollection(collection);
+  const snapshot = await client.createSnapshot(collection, { wait: true });
+  return { content: [{ type: 'text', text: JSON.stringify({ snapshot_name: snapshot?.name ?? '', created_at: snapshot?.creation_time ?? '' }) }] };
+}
+
+async function handleSnapshotList(args: Record<string, unknown>) {
+  const collection = (args.collection as string) ?? DEFAULT_COLLECTION;
+  await ensureCollection(collection);
+  const snapshots = await client.listSnapshots(collection);
+  const formatted = snapshots.map((s) => ({
+    name: s.name,
+    created_at: s.creation_time ?? '',
+    size: s.size,
+  }));
+  return { content: [{ type: 'text', text: JSON.stringify(formatted) }] };
+}
+
+async function handleSnapshotDelete(args: Record<string, unknown>) {
+  const collection = (args.collection as string) ?? DEFAULT_COLLECTION;
+  const snapshot_name = args.snapshot_name as string;
+  const result = await client.deleteSnapshot(collection, snapshot_name, { wait: true });
+  return { content: [{ type: 'text', text: JSON.stringify({ deleted: result }) }] };
+}
+
 const server = new Server(
   { name: 'qdrant-mcp', version: '1.0.0' },
   { capabilities: { tools: {} } },
@@ -388,6 +548,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'list_memories': return await handleListMemories(args ?? {});
       case 'update_memory': return await handleUpdateMemory(args ?? {});
       case 'hybrid_search': return await handleHybridSearch(args ?? {});
+      case 'count_memories': return await handleCountMemories(args ?? {});
+      case 'delete_by_filter': return await handleDeleteByFilter(args ?? {});
+      case 'create_payload_index': return await handleCreatePayloadIndex(args ?? {});
+      case 'snapshot_create': return await handleSnapshotCreate(args ?? {});
+      case 'snapshot_list': return await handleSnapshotList(args ?? {});
+      case 'snapshot_delete': return await handleSnapshotDelete(args ?? {});
       default: throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
     }
   } catch (error) {
