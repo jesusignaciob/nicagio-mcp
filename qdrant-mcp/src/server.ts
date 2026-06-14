@@ -94,6 +94,62 @@ const TOOLS = [
       required: ['id'],
     },
   },
+  {
+    name: 'list_memories',
+    description: 'List/search memories with payload filters (metadata browsing, not semantic search)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Optional text filter (partial match on payload.text)' },
+        collection: { type: 'string', description: `Collection name (default: ${DEFAULT_COLLECTION})` },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Filter by tags' },
+        from: { type: 'string', description: "Filter by 'from' field in metadata" },
+        to: { type: 'string', description: "Filter by 'to' field in metadata" },
+        priority: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Filter by priority' },
+        since: { type: 'string', description: 'ISO date — filter by timestamp >= this' },
+        limit: { type: 'number', description: 'Number of results (default: 20)' },
+        offset: { type: 'string', description: 'Cursor for pagination (from previous response next_offset)' },
+      },
+    },
+  },
+  {
+    name: 'update_memory',
+    description: 'Update metadata of an existing memory WITHOUT re-generating the vector embedding',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Point ID to update' },
+        collection: { type: 'string', description: `Collection name (default: ${DEFAULT_COLLECTION})` },
+        text: { type: 'string', description: 'New text content' },
+        metadata: {
+          type: 'object',
+          description: 'New metadata to merge into existing payload',
+          additionalProperties: true,
+        },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'hybrid_search',
+    description: 'Combine dense vector search (semantic) with text keyword search using RRF fusion',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search query text' },
+        collection: { type: 'string', description: `Collection name (default: ${DEFAULT_COLLECTION})` },
+        n_results: { type: 'number', description: 'Number of results (default: 5)' },
+        filter: {
+          type: 'object',
+          description: 'Optional metadata filter (same as search_memory)',
+          additionalProperties: true,
+        },
+        sparse_weight: { type: 'number', description: 'Weight for sparse results in RRF (default: 1.0)' },
+        dense_weight: { type: 'number', description: 'Weight for dense results in RRF (default: 1.0)' },
+      },
+      required: ['query'],
+    },
+  },
 ];
 
 function generateId(): string {
@@ -128,7 +184,7 @@ async function handleStoreMemory(args: Record<string, unknown>) {
   const id = (args.id as string) ?? generateId();
   const text = args.text as string;
   const vector = await embed(text);
-  const payload: Record<string, unknown> = { text };
+  const payload: Record<string, unknown> = { text, created_at: Date.now() };
   const meta = parseMetadata(args.metadata);
   if (meta) Object.assign(payload, meta);
   await client.upsert(collection, {
@@ -184,6 +240,135 @@ async function handleDeleteMemory(args: Record<string, unknown>) {
   return { content: [{ type: 'text', text: JSON.stringify({ id, status: 'deleted' }) }] };
 }
 
+async function handleListMemories(args: Record<string, unknown>) {
+  const collection = (args.collection as string) ?? DEFAULT_COLLECTION;
+  await ensureCollection(collection);
+  const must: Record<string, unknown>[] = [];
+  if (args.text) {
+    must.push({ key: 'text', match: { text: args.text as string } });
+  }
+  if (args.tags) {
+    const tags = Array.isArray(args.tags) ? (args.tags as string[]) : [String(args.tags)];
+    for (const tag of tags) {
+      must.push({ key: 'tags', match: { text: tag } });
+    }
+  }
+  if (args.from) {
+    must.push({ key: 'from', match: { value: args.from as string } });
+  }
+  if (args.to) {
+    must.push({ key: 'to', match: { value: args.to as string } });
+  }
+  if (args.priority) {
+    must.push({ key: 'priority', match: { value: args.priority as string } });
+  }
+  if (args.since) {
+    const sinceMs = new Date(args.since as string).getTime();
+    if (!isNaN(sinceMs)) {
+      must.push({ key: 'created_at', range: { gte: sinceMs } });
+    }
+  }
+  const filter = must.length > 0 ? { must } : undefined;
+  const limit = (args.limit as number) ?? 20;
+  const offset = args.offset as string | undefined;
+  const result = await client.scroll(collection, { filter, limit, offset, with_payload: true, with_vector: false });
+  const points = result.points.map((p) => {
+    const payload = (p.payload as Record<string, unknown>) ?? {};
+    return {
+      id: p.id,
+      text: (payload.text as string) ?? '',
+      metadata: (() => {
+        const { text: _, created_at: _c, ...rest } = payload;
+        return Object.keys(rest).length > 0 ? rest : null;
+      })(),
+      created_at: (payload.created_at as number) ?? null,
+    };
+  });
+  return { content: [{ type: 'text', text: JSON.stringify({ points, next_offset: result.next_page_offset ?? null }, null, 2) }] };
+}
+
+async function handleUpdateMemory(args: Record<string, unknown>) {
+  const collection = (args.collection as string) ?? DEFAULT_COLLECTION;
+  const id = args.id as string;
+  const payload: Record<string, unknown> = {};
+  const updatedFields: string[] = [];
+  if (args.text) {
+    payload.text = args.text as string;
+    updatedFields.push('text');
+  }
+  if (args.metadata && typeof args.metadata === 'object') {
+    for (const [key, val] of Object.entries(args.metadata as Record<string, unknown>)) {
+      if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
+        payload[key] = val;
+        updatedFields.push(key);
+      }
+    }
+  }
+  if (updatedFields.length === 0) {
+    return { content: [{ type: 'text', text: JSON.stringify({ id, status: 'no_changes', updated_fields: [] }) }] };
+  }
+  await client.setPayload(collection, { payload, points: [id], wait: true });
+  return { content: [{ type: 'text', text: JSON.stringify({ id, status: 'updated', updated_fields: updatedFields }) }] };
+}
+
+async function handleHybridSearch(args: Record<string, unknown>) {
+  const collection = (args.collection as string) ?? DEFAULT_COLLECTION;
+  await ensureCollection(collection);
+  const query = args.query as string;
+  const n_results = (args.n_results as number) ?? 5;
+  const denseWeight = (args.dense_weight as number) ?? 1.0;
+  const sparseWeight = (args.sparse_weight as number) ?? 1.0;
+  const k = 60;
+  const limit = n_results * 2;
+  const vector = await embed(query);
+  const denseResults = await client.search(collection, {
+    vector,
+    limit,
+    filter: parseFilter(args.filter),
+  });
+  const textMust: Record<string, unknown>[] = [{ key: 'text', match: { text: query } }];
+  const existingFilter = parseFilter(args.filter);
+  if (existingFilter) {
+    const existingMust = existingFilter.must as Record<string, unknown>[];
+    textMust.push(...existingMust);
+  }
+  const scrollResults = await client.scroll(collection, {
+    filter: { must: textMust },
+    limit,
+    with_payload: true,
+    with_vector: false,
+  });
+  const idMap: Record<string, { denseRank: number | null; sparseRank: number | null; payload: Record<string, unknown> }> = {};
+  denseResults.forEach((r, i) => {
+    const id = String(r.id);
+    const payload = (r.payload as Record<string, unknown>) ?? {};
+    idMap[id] = idMap[id] ?? { denseRank: null, sparseRank: null, payload: {} };
+    idMap[id].denseRank = i + 1;
+    idMap[id].payload = { ...idMap[id].payload, ...payload };
+  });
+  scrollResults.points.forEach((p, i) => {
+    const id = String(p.id);
+    const payload = (p.payload as Record<string, unknown>) ?? {};
+    idMap[id] = idMap[id] ?? { denseRank: null, sparseRank: null, payload: {} };
+    idMap[id].sparseRank = i + 1;
+    idMap[id].payload = { ...idMap[id].payload, ...payload };
+  });
+  const fused = Object.entries(idMap).map(([id, info]) => {
+    let score = 0;
+    if (info.denseRank !== null) score += denseWeight / (k + info.denseRank);
+    if (info.sparseRank !== null) score += sparseWeight / (k + info.sparseRank);
+    const { text: _, ...rest } = info.payload;
+    return {
+      id,
+      text: (info.payload.text as string) ?? '',
+      metadata: Object.keys(rest).length > 0 ? rest : null,
+      score,
+    };
+  });
+  fused.sort((a, b) => b.score - a.score);
+  return { content: [{ type: 'text', text: JSON.stringify(fused.slice(0, n_results), null, 2) }] };
+}
+
 const server = new Server(
   { name: 'qdrant-mcp', version: '1.0.0' },
   { capabilities: { tools: {} } },
@@ -200,6 +385,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'list_collections': return await handleListCollections();
       case 'get_collection_info': return await handleGetCollectionInfo(args ?? {});
       case 'delete_memory': return await handleDeleteMemory(args ?? {});
+      case 'list_memories': return await handleListMemories(args ?? {});
+      case 'update_memory': return await handleUpdateMemory(args ?? {});
+      case 'hybrid_search': return await handleHybridSearch(args ?? {});
       default: throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
     }
   } catch (error) {
