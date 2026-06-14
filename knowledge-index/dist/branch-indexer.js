@@ -1,9 +1,24 @@
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { QdrantClient, buildFilter } from './qdrant-client.js';
 function runGit(repoPath, args) {
-    const cmd = `git -C ${JSON.stringify(repoPath)} ${args.join(' ')}`;
-    return execSync(cmd, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }).trim();
+    return execFileSync('git', ['-C', repoPath, ...args], { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }).trim();
+}
+function getDefaultBranch(repoPath) {
+    try {
+        const symref = runGit(repoPath, ['symbolic-ref', 'refs/remotes/origin/HEAD']);
+        return symref.replace('refs/remotes/origin/', '');
+    }
+    catch {
+        // Fallback: check if main or master exists
+        try {
+            runGit(repoPath, ['rev-parse', '--verify', 'main']);
+            return 'main';
+        }
+        catch {
+            return 'master';
+        }
+    }
 }
 function extractRepoName(repoPath) {
     const repo = repoPath.replace(/\/+$/, '');
@@ -43,10 +58,10 @@ function parseDiffStat(statOutput) {
         const trimmed = line.trim();
         if (!trimmed)
             continue;
-        if (trimmed.startsWith(' ') && trimmed.includes('|')) {
+        if (trimmed.includes('|') && !trimmed.startsWith('create') && !trimmed.startsWith('delete') && !trimmed.includes('files changed')) {
             const parts = trimmed.split('|');
             const path = parts[0]?.trim() ?? '';
-            if (path)
+            if (path && !path.includes('=>') && !path.includes('...'))
                 files.push({ filePath: path, changeType: 'modified' });
         }
         else if (trimmed.startsWith('create mode')) {
@@ -106,19 +121,20 @@ export class BranchIndexer {
         const result = { indexed: 0, errors: 0, details: [] };
         try {
             const repoName = extractRepoName(repoPath);
+            const base = getDefaultBranch(repoPath);
             const commits = this.getCommits(repoPath, branch);
             if (commits.length === 0) {
-                result.details.push(`No new commits on ${branch} vs main`);
+                result.details.push(`No new commits on ${branch} vs ${base}`);
                 return result;
             }
             const latestCommit = commits[0]?.hash ?? '';
             const author = commits[0]?.author ?? '';
             const commitMessage = commits[0]?.message ?? '';
-            const statOutput = runGit(repoPath, ['diff', `main..${branch}`, '--stat']);
+            const statOutput = runGit(repoPath, ['diff', `${base}..${branch}`, '--stat']);
             const fileChanges = parseDiffStat(statOutput);
             for (const fc of fileChanges) {
                 try {
-                    const diff = runGit(repoPath, ['diff', `main..${branch}`, '--', fc.filePath]);
+                    const diff = runGit(repoPath, ['diff', `${base}..${branch}`, '--', fc.filePath]);
                     const diffSummary = summarizeDiff(fc.filePath, diff, fc.changeType);
                     const vector = await this.embedFn(diffSummary);
                     await this.qdrant.upsertPoints([{
@@ -208,13 +224,14 @@ export class BranchIndexer {
                 result.details.push('No new commits since last index');
                 return result;
             }
+            const base = getDefaultBranch(repoPath);
             const latestCommit = commits[0]?.hash ?? '';
             const author = commits[0]?.author ?? '';
-            const statOutput = runGit(repoPath, ['diff', `main..${branch}`, '--stat']);
+            const statOutput = runGit(repoPath, ['diff', `${base}..${branch}`, '--stat']);
             const fileChanges = parseDiffStat(statOutput);
             for (const fc of fileChanges) {
                 try {
-                    const diff = runGit(repoPath, ['diff', `main..${branch}`, '--', fc.filePath]);
+                    const diff = runGit(repoPath, ['diff', `${base}..${branch}`, '--', fc.filePath]);
                     const diffSummary = summarizeDiff(fc.filePath, diff, fc.changeType);
                     const vector = await this.embedFn(diffSummary);
                     await this.qdrant.upsertPoints([{
@@ -298,7 +315,8 @@ export class BranchIndexer {
         };
     }
     getCommits(repoPath, branch) {
-        const log = runGit(repoPath, ['log', `main..${branch}`, '--format=%H|%an|%s']);
+        const base = getDefaultBranch(repoPath);
+        const log = runGit(repoPath, ['log', `${base}..${branch}`, '--format=%H|%an|%s']);
         if (!log)
             return [];
         return log.split('\n').filter(Boolean).map((line) => {
