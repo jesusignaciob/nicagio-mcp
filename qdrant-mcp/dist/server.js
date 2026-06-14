@@ -3,6 +3,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { QdrantClient } from '@qdrant/js-client-rest';
+import { randomUUID } from 'node:crypto';
 import { pipeline } from '@huggingface/transformers';
 const QDRANT_URL = process.env.QDRANT_URL ?? 'http://127.0.0.1:6333';
 const DEFAULT_COLLECTION = process.env.QDRANT_COLLECTION ?? 'openclaw-memory';
@@ -12,9 +13,17 @@ let embed;
 async function ensureCollection(name) {
     const { exists } = await client.collectionExists(name);
     if (!exists) {
-        await client.createCollection(name, {
-            vectors: { size: 384, distance: 'Cosine' },
-        });
+        try {
+            await client.createCollection(name, {
+                vectors: { size: 384, distance: 'Cosine' },
+            });
+        }
+        catch (e) {
+            const err = e;
+            if (err.status !== 409 && !(err.message ?? '').includes('Conflict')) {
+                throw e;
+            }
+        }
     }
 }
 const TOOLS = [
@@ -83,7 +92,7 @@ const TOOLS = [
     },
 ];
 function generateId() {
-    return `mem_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    return randomUUID();
 }
 function parseMetadata(raw) {
     if (!raw || typeof raw !== 'object')

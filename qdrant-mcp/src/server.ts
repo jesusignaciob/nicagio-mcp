@@ -3,6 +3,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { QdrantClient } from '@qdrant/js-client-rest';
+import { randomUUID } from 'node:crypto';
 import { pipeline } from '@huggingface/transformers';
 
 const QDRANT_URL = process.env.QDRANT_URL ?? 'http://127.0.0.1:6333';
@@ -16,9 +17,16 @@ let embed: (text: string) => Promise<number[]>;
 async function ensureCollection(name: string) {
   const { exists } = await client.collectionExists(name);
   if (!exists) {
-    await client.createCollection(name, {
-      vectors: { size: 384, distance: 'Cosine' },
-    });
+    try {
+      await client.createCollection(name, {
+        vectors: { size: 384, distance: 'Cosine' },
+      });
+    } catch (e) {
+      const err = e as { status?: number; message?: string };
+      if (err.status !== 409 && !(err.message ?? '').includes('Conflict')) {
+        throw e;
+      }
+    }
   }
 }
 
@@ -89,7 +97,7 @@ const TOOLS = [
 ];
 
 function generateId(): string {
-  return `mem_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  return randomUUID();
 }
 
 function parseMetadata(raw: unknown): Record<string, string | number | boolean> | undefined {
